@@ -1044,20 +1044,34 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
         var agentId = this.agentId || localStorage.getItem("pbiviz_tess_agentId");
         var proxyBase = (this.proxyUrl || "").replace(/\/$/, "");
 
-        // Build messages: inject system prompt into first user message
-        var builtMessages = messages.map(function(m, idx) {
-            if (idx === 0 && m.role === "user") {
+        // TESS requires conversation to start with a user message.
+        // Drop any leading assistant/thinking messages (e.g. the initial welcome bubble).
+        var cleaned = [];
+        var foundUser = false;
+        for (var i = 0; i < messages.length; i++) {
+            var m = messages[i];
+            if (!foundUser && m.role !== "user") continue;
+            foundUser = true;
+            if (m.role === "user" || m.role === "assistant") cleaned.push(m);
+        }
+
+        // Inject system context (DAX measures, categories) into the first user message.
+        var builtMessages = cleaned.map(function(m, idx) {
+            if (idx === 0 && m.role === "user" && systemPrompt) {
                 return { role: "user", content: systemPrompt + "\n\n---\n" + m.content };
             }
             return { role: m.role, content: m.content };
         });
 
+        if (builtMessages.length === 0) {
+            return Promise.reject(new Error("Nenhuma mensagem de usuário para enviar"));
+        }
+
         var body = JSON.stringify({
             model: self.model || "tess-5",
             temperature: "1",
             messages: builtMessages,
-            tools: "no-tools",
-            wait_execution: true
+            tools: "no-tools"
         });
 
         var tessEndpoint = proxyBase
@@ -1074,7 +1088,13 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
         }).then(function(r) {
             if (!r.ok) {
                 return r.json().catch(function() { return {}; }).then(function(err) {
-                    throw new Error((err && err.error && err.error.message) || ("Erro " + r.status));
+                    // TESS can return errors in several shapes — surface the most descriptive one
+                    var msg = (err && (
+                        err.message ||
+                        (err.error && (typeof err.error === "string" ? err.error : err.error.message)) ||
+                        (err.errors && JSON.stringify(err.errors))
+                    )) || ("Erro " + r.status);
+                    throw new Error(msg);
                 });
             }
             return r.json();
