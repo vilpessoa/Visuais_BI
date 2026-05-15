@@ -218,6 +218,8 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             loadAgentsBtn: "Cargar Agentes",
             agentLoadError: "Error al cargar agentes. Verifique el proxy y la API Key.",
             agentSelectPlaceholder: "Seleccione un agente...",
+            agentFieldsTitle: "Campos requeridos del agente:",
+            agentFieldsLoading: "Cargando campos del agente...",
             nextBtn: "Ir al Chat →",
             errUrl: "La URL debe empezar con http",
             errKey: "La API Key no puede estar vacía",
@@ -262,6 +264,8 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             loadAgentsBtn: "Load Agents",
             agentLoadError: "Error loading agents. Check proxy and API Key.",
             agentSelectPlaceholder: "Select an agent...",
+            agentFieldsTitle: "Required agent fields:",
+            agentFieldsLoading: "Loading agent fields...",
             nextBtn: "Go to Chat →",
             errUrl: "URL must start with http",
             errKey: "API Key cannot be empty",
@@ -306,6 +310,8 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             loadAgentsBtn: "Carregar Agentes",
             agentLoadError: "Erro ao carregar agentes. Verifique o proxy e a API Key.",
             agentSelectPlaceholder: "Selecione um agente...",
+            agentFieldsTitle: "Campos obrigatórios do agente:",
+            agentFieldsLoading: "Carregando campos do agente...",
             nextBtn: "Ir ao Chat →",
             errUrl: "A URL deve começar com http",
             errKey: "A API Key não pode estar vazia",
@@ -356,6 +362,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             this.provider = localStorage.getItem("pbiviz_aiChat_provider") || "tess";
             this.model = localStorage.getItem("pbiviz_aiChat_model") || "tess-5";
             this.agentId = localStorage.getItem("pbiviz_tess_agentId") || "";
+            this.agentFields = JSON.parse(localStorage.getItem("pbiviz_tess_agentFields") || "{}");
         } catch(e) {}
 
         var needsAgent = this.provider === "tess" && !this.agentId;
@@ -498,6 +505,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
         var stateKey = "";
         var stateModel = "";
         var stateAgentId = this.agentId;
+        var stateAgentFields = {};
 
         function renderDynamic() {
             while (dynArea.firstChild) dynArea.removeChild(dynArea.firstChild);
@@ -704,10 +712,94 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 placeholderOpt.textContent = self.t("agentSelectPlaceholder");
                 agentSel.appendChild(placeholderOpt);
                 stateAgentId = "";
+
+                // Container for dynamic required fields (agent questions)
+                var agentFieldsContainer = document.createElement("div");
+                agentFieldsContainer.style.cssText = "display:none;flex-direction:column;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #E5E7EB;";
+
                 agentSel.addEventListener("change", function() {
                     stateAgentId = agentSel.value;
+                    stateAgentFields = {};
+                    // Clear previous fields
+                    while (agentFieldsContainer.firstChild) agentFieldsContainer.removeChild(agentFieldsContainer.firstChild);
+                    agentFieldsContainer.style.display = "none";
+                    if (!stateAgentId) return;
+
+                    // Fetch agent details to discover required questions
+                    var proxyBase2 = (stateProxy || "").replace(/\/$/, "");
+                    var detailUrl = proxyBase2 ? proxyBase2 + "/agents/" + stateAgentId : "https://api.tess.im/agents/" + stateAgentId;
+                    var detailOpts = proxyBase2 ? {} : { headers: { "Authorization": "Bearer " + stateKey } };
+
+                    var loadingEl = document.createElement("span");
+                    loadingEl.style.cssText = "font-size:10px;color:#6B7280;";
+                    loadingEl.textContent = self.t("agentFieldsLoading");
+                    agentFieldsContainer.appendChild(loadingEl);
+                    agentFieldsContainer.style.display = "flex";
+
+                    fetch(detailUrl, detailOpts)
+                        .then(function(r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+                        .then(function(agent) {
+                            while (agentFieldsContainer.firstChild) agentFieldsContainer.removeChild(agentFieldsContainer.firstChild);
+                            var questions = (agent.questions || agent.fields || []).filter(function(q) { return q.required; });
+                            if (questions.length === 0) { agentFieldsContainer.style.display = "none"; return; }
+
+                            // Title
+                            var titleEl = document.createElement("div");
+                            titleEl.className = "field-label";
+                            titleEl.textContent = self.t("agentFieldsTitle");
+                            agentFieldsContainer.appendChild(titleEl);
+
+                            // Saved values from previous session
+                            var saved = {};
+                            try { saved = JSON.parse(localStorage.getItem("pbiviz_tess_agentFields") || "{}"); } catch(e) {}
+
+                            questions.forEach(function(q) {
+                                var lbl = document.createElement("label");
+                                lbl.className = "field-label";
+                                lbl.textContent = (q.description || q.label || q.name) + " *";
+
+                                var inp;
+                                if (q.type === "select" && q.options && q.options.length > 0) {
+                                    inp = document.createElement("select");
+                                    inp.className = "field-input";
+                                    var emptyOpt = document.createElement("option");
+                                    emptyOpt.value = ""; emptyOpt.textContent = "Selecione...";
+                                    inp.appendChild(emptyOpt);
+                                    q.options.forEach(function(opt) {
+                                        var o = document.createElement("option");
+                                        o.value = typeof opt === "object" ? (opt.value || opt.id || opt) : opt;
+                                        o.textContent = typeof opt === "object" ? (opt.label || opt.name || opt.value || opt) : opt;
+                                        inp.appendChild(o);
+                                    });
+                                } else {
+                                    inp = document.createElement("input");
+                                    inp.type = "text";
+                                    inp.className = "field-input";
+                                    inp.placeholder = q.description || q.label || q.name;
+                                }
+
+                                // Pre-fill from saved value
+                                if (saved[q.name] !== undefined) {
+                                    inp.value = saved[q.name];
+                                    stateAgentFields[q.name] = saved[q.name];
+                                }
+
+                                inp.addEventListener("input", function() { stateAgentFields[q.name] = inp.value; });
+                                inp.addEventListener("change", function() { stateAgentFields[q.name] = inp.value; });
+
+                                agentFieldsContainer.appendChild(lbl);
+                                agentFieldsContainer.appendChild(inp);
+                            });
+                        })
+                        .catch(function() {
+                            // Non-blocking: if details can't load, fields won't show
+                            while (agentFieldsContainer.firstChild) agentFieldsContainer.removeChild(agentFieldsContainer.firstChild);
+                            agentFieldsContainer.style.display = "none";
+                        });
                 });
+
                 agentSelWrap.appendChild(agentSel);
+                agentSelWrap.appendChild(agentFieldsContainer);
 
                 var agentErrEl = document.createElement("div");
                 agentErrEl.className = "setup-error";
@@ -785,6 +877,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             stateKey = "";
             stateModel = "";
             stateAgentId = "";
+            stateAgentFields = {};
             renderDynamic();
         });
 
@@ -836,6 +929,10 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 localStorage.setItem("pbiviz_aiChat_provider", self.provider);
                 localStorage.setItem("pbiviz_aiChat_model", self.model);
                 if (self.agentId) localStorage.setItem("pbiviz_tess_agentId", self.agentId);
+                if (Object.keys(stateAgentFields).length > 0) {
+                    localStorage.setItem("pbiviz_tess_agentFields", JSON.stringify(stateAgentFields));
+                    self.agentFields = stateAgentFields;
+                }
             } catch(e) {}
 
             self.messages = [{ role: "assistant", content: self.t("welcomeMsg") }];
@@ -1067,12 +1164,19 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             return Promise.reject(new Error("Nenhuma mensagem de usuário para enviar"));
         }
 
-        var body = JSON.stringify({
+        // Merge agent required fields (questions) into execute body at top level
+        var agentFields = {};
+        try { agentFields = JSON.parse(localStorage.getItem("pbiviz_tess_agentFields") || "{}"); } catch(e) {}
+        if (self.agentFields && Object.keys(self.agentFields).length > 0) agentFields = self.agentFields;
+
+        var bodyObj = Object.assign({
             model: self.model || "tess-5",
             temperature: "1",
             messages: builtMessages,
             tools: "no-tools"
-        });
+        }, agentFields);
+
+        var body = JSON.stringify(bodyObj);
 
         var tessEndpoint = proxyBase
             ? proxyBase + "/agents/" + agentId + "/execute?wait_execution=true"
