@@ -1,12 +1,13 @@
 // ============================================
 // Proxy universal para AI Analytics Chat
-// Soporta: Anthropic, OpenAI, Gemini, Azure OpenAI
+// Soporta: Anthropic, OpenAI, Gemini, Azure OpenAI, TESS AI
 // ============================================
 // Uso:
 //   node proxy.js --provider anthropic --key sk-ant-api03-... --port 3100
 //   node proxy.js --provider openai    --key sk-...           --port 3100
 //   node proxy.js --provider gemini    --key AIzaSy...        --port 3100
 //   node proxy.js --provider azure     --key TU_KEY --azure-url https://TU-RECURSO.openai.azure.com --azure-deployment mi-gpt4 --port 3100
+//   node proxy.js --provider tess      --key seu-token-tess --port 3100
 // ============================================
 
 const http  = require("http");
@@ -65,12 +66,21 @@ const PROVIDER_CONFIGS = {
             "api-key": key,
             "Content-Length": bodyLen
         })
+    },
+    tess: {
+        hostname: "api.tess.im",
+        path: null, // dynamic — handled in handleTessRequest
+        buildHeaders: (key, bodyLen) => ({
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${key}`,
+            "Content-Length": bodyLen
+        })
     }
 };
 
 const cfg = PROVIDER_CONFIGS[PROVIDER];
 if (!cfg) {
-    console.error(`❌  Proveedor no soportado: ${PROVIDER}. Usa: anthropic, openai, gemini, azure`);
+    console.error(`❌  Proveedor no soportado: ${PROVIDER}. Usa: anthropic, openai, gemini, azure, tess`);
     process.exit(1);
 }
 
@@ -83,10 +93,17 @@ console.log(`    Ctrl+C para detener\n`);
 
 const server = http.createServer((req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "*");
 
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
+
+    // Route TESS-specific endpoints
+    if (PROVIDER === "tess") {
+        handleTessRequest(req, res);
+        return;
+    }
+
     if (req.method !== "POST") { res.writeHead(404); res.end(JSON.stringify({ error: "Not found" })); return; }
 
     let body = "";
@@ -164,6 +181,99 @@ function forwardRequest(options, body, res, transform) {
         res.writeHead(502); res.end(JSON.stringify({ error: { message: e.message } }));
     });
     proxyReq.write(body);
+    proxyReq.end();
+}
+
+function handleTessRequest(req, res) {
+    const parsedUrl = url.parse(req.url, true);
+    const pathname  = parsedUrl.pathname || "";
+
+    // GET /agents — list agents
+    if (req.method === "GET" && pathname === "/agents") {
+        console.log(`📨  tess ← GET /agents`);
+        const options = {
+            hostname: cfg.hostname,
+            path: "/agents",
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${API_KEY}`
+            }
+        };
+        forwardGetRequest(options, res);
+        return;
+    }
+
+    // GET /agent-responses/:id — poll response
+    const pollMatch = pathname.match(/^\/agent-responses\/(\d+)$/);
+    if (req.method === "GET" && pollMatch) {
+        const responseId = pollMatch[1];
+        console.log(`📨  tess ← GET /agent-responses/${responseId}`);
+        const options = {
+            hostname: cfg.hostname,
+            path: `/agent-responses/${responseId}`,
+            method: "GET",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${API_KEY}`
+            }
+        };
+        forwardGetRequest(options, res);
+        return;
+    }
+
+    // POST /agents/:id/execute — execute agent
+    const execMatch = pathname.match(/^\/agents\/([^/]+)\/execute$/);
+    if (req.method === "POST" && execMatch) {
+        const agentId = execMatch[1];
+        const query   = parsedUrl.search || "";
+        const target  = `/agents/${agentId}/execute${query.includes("wait_execution") ? query : (query ? query + "&wait_execution=true" : "?wait_execution=true")}`;
+        console.log(`📨  tess ← POST /agents/${agentId}/execute`);
+
+        let body = "";
+        req.on("data", chunk => body += chunk);
+        req.on("end", () => {
+            let parsed = {};
+            try { parsed = JSON.parse(body); } catch(e) {}
+
+            // Apply defaults
+            if (!parsed.model)       parsed.model       = "tess-5";
+            if (!parsed.temperature) parsed.temperature = "1";
+            if (!parsed.tools)       parsed.tools       = "no-tools";
+            parsed.wait_execution = true;
+
+            const finalBody = JSON.stringify(parsed);
+            const bodyLen   = Buffer.byteLength(finalBody);
+            const options = {
+                hostname: cfg.hostname,
+                path: target,
+                method: "POST",
+                headers: cfg.buildHeaders(API_KEY, bodyLen)
+            };
+            forwardRequest(options, finalBody, res, null);
+        });
+        return;
+    }
+
+    res.writeHead(404);
+    res.end(JSON.stringify({ error: "TESS proxy: endpoint not found" }));
+}
+
+function forwardGetRequest(options, res) {
+    const proxyReq = https.request(options, (proxyRes) => {
+        let responseBody = "";
+        proxyRes.on("data", chunk => responseBody += chunk);
+        proxyRes.on("end", () => {
+            console.log(`✅  tess → ${proxyRes.statusCode}`);
+            if (proxyRes.statusCode !== 200) console.error(`⚠️  ${responseBody.substring(0, 300)}`);
+            res.writeHead(proxyRes.statusCode, { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" });
+            res.end(responseBody);
+        });
+    });
+    proxyReq.on("error", (e) => {
+        console.error("❌  Error de red:", e.message);
+        res.writeHead(502); res.end(JSON.stringify({ error: { message: e.message } }));
+    });
     proxyReq.end();
 }
 
