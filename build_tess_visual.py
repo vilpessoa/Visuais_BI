@@ -225,6 +225,10 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             errKey: "La API Key no puede estar vacía",
             errModel: "Debes indicar el deployment name para Azure",
             errAgent: "Debes seleccionar un agente TESS",
+            errNoAgent: "Selecciona un agente TESS en ⚙ Config",
+            agentManualLabel: "O ingresa el ID del agente directamente:",
+            agentManualPlaceholder: "ID del agente (ej: 45)",
+            orLabel: "o",
             langLabel: "Idioma:",
             mod2Title: "Power IA TESS",
             configBtn: "⚙ Config",
@@ -271,6 +275,10 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             errKey: "API Key cannot be empty",
             errModel: "You must provide the deployment name for Azure",
             errAgent: "You must select a TESS agent",
+            errNoAgent: "Select a TESS agent in ⚙ Config",
+            agentManualLabel: "Or enter the agent ID directly:",
+            agentManualPlaceholder: "Agent ID (e.g. 45)",
+            orLabel: "or",
             langLabel: "Language:",
             mod2Title: "Power IA TESS",
             configBtn: "⚙ Config",
@@ -317,6 +325,10 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             errKey: "A API Key não pode estar vazia",
             errModel: "Você deve indicar o deployment name para Azure",
             errAgent: "Você deve selecionar um agente TESS",
+            errNoAgent: "Selecione um agente TESS em ⚙ Config",
+            agentManualLabel: "Ou insira o ID do agente diretamente:",
+            agentManualPlaceholder: "ID do agente (ex: 45)",
+            orLabel: "ou",
             langLabel: "Idioma:",
             mod2Title: "Power IA TESS",
             configBtn: "⚙ Config",
@@ -703,7 +715,9 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 agentRow.appendChild(spinnerEl);
 
                 var agentSelWrap = document.createElement("div");
-                agentSelWrap.style.display = "none";
+                agentSelWrap.style.display = "flex";
+                agentSelWrap.style.flexDirection = "column";
+                agentSelWrap.style.gap = "4px";
 
                 var agentSel = document.createElement("select");
                 agentSel.className = "field-input";
@@ -711,14 +725,37 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 placeholderOpt.value = "";
                 placeholderOpt.textContent = self.t("agentSelectPlaceholder");
                 agentSel.appendChild(placeholderOpt);
+                agentSel.style.display = "none"; // shown only after clicking "Carregar Agentes"
                 stateAgentId = "";
 
                 // Container for dynamic required fields (agent questions)
                 var agentFieldsContainer = document.createElement("div");
                 agentFieldsContainer.style.cssText = "display:none;flex-direction:column;gap:6px;margin-top:6px;padding-top:6px;border-top:1px solid #E5E7EB;";
 
+                // Manual ID input — alternative to the dropdown
+                var agentManualWrap = document.createElement("div");
+                agentManualWrap.style.cssText = "display:flex;flex-direction:column;gap:3px;margin-top:4px;";
+                var agentManualLbl = document.createElement("label");
+                agentManualLbl.className = "field-label";
+                agentManualLbl.textContent = self.t("agentManualLabel");
+                var agentManualInp = document.createElement("input");
+                agentManualInp.type = "text";
+                agentManualInp.className = "field-input";
+                agentManualInp.placeholder = self.t("agentManualPlaceholder");
+                // Pre-fill from saved agentId
+                if (self.agentId) { agentManualInp.value = self.agentId; stateAgentId = self.agentId; }
+                agentManualInp.addEventListener("input", function() {
+                    stateAgentId = agentManualInp.value.trim();
+                    // Clear dropdown selection when typing manually
+                    agentSel.value = "";
+                });
+                agentManualWrap.appendChild(agentManualLbl);
+                agentManualWrap.appendChild(agentManualInp);
+
                 agentSel.addEventListener("change", function() {
                     stateAgentId = agentSel.value;
+                    // Sync manual input with dropdown selection
+                    agentManualInp.value = agentSel.value;
                     stateAgentFields = {};
                     // Clear previous fields
                     while (agentFieldsContainer.firstChild) agentFieldsContainer.removeChild(agentFieldsContainer.firstChild);
@@ -799,6 +836,16 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 });
 
                 agentSelWrap.appendChild(agentSel);
+                // Divider "or"
+                var orDiv = document.createElement("div");
+                orDiv.className = "or-divider";
+                orDiv.style.margin = "4px 0";
+                var orLine1 = document.createElement("div"); orLine1.className = "or-line";
+                var orTxt = document.createElement("span"); orTxt.className = "or-text"; orTxt.textContent = self.t("orLabel");
+                var orLine2 = document.createElement("div"); orLine2.className = "or-line";
+                orDiv.appendChild(orLine1); orDiv.appendChild(orTxt); orDiv.appendChild(orLine2);
+                agentSelWrap.appendChild(orDiv);
+                agentSelWrap.appendChild(agentManualWrap);
                 agentSelWrap.appendChild(agentFieldsContainer);
 
                 var agentErrEl = document.createElement("div");
@@ -839,11 +886,11 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                             agents.forEach(function(agent) {
                                 var opt = document.createElement("option");
                                 opt.value = agent.id;
-                                opt.textContent = agent.name || ("Agent " + agent.id);
+                                opt.textContent = agent.title || agent.name || agent.slug || ("Agent " + agent.id);
                                 agentSel.appendChild(opt);
                             });
 
-                            agentSelWrap.style.display = "block";
+                            agentSel.style.display = "block"; // show dropdown after loading
                         })
                         .catch(function(err) {
                             spinnerEl.style.display = "none";
@@ -910,11 +957,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 errDiv.style.display = "block";
                 return;
             }
-            if (prov.hasDynamicAgents && !stateAgentId) {
-                errDiv.textContent = self.t("errAgent");
-                errDiv.style.display = "block";
-                return;
-            }
+            // Agent selection is optional at setup — missing agentId will error at send time
 
             self.provider = currentProviderId;
             self.apiKey = stateKey;
@@ -1139,6 +1182,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
     Visual.prototype.callTess = function(messages, systemPrompt) {
         var self = this;
         var agentId = this.agentId || localStorage.getItem("pbiviz_tess_agentId");
+        if (!agentId) throw new Error(self.t("errNoAgent"));
         var proxyBase = (this.proxyUrl || "").replace(/\/$/, "");
 
         // TESS requires conversation to start with a user message.
