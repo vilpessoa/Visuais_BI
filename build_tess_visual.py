@@ -122,7 +122,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             icon: "🔶",
             urlLabel: "proxyLabel",
             urlPlaceholder: "http://localhost:3100",
-            urlRequired: true,
+            urlRequired: false,
             keyLabel: "keyLabel",
             keyPlaceholder: "seu-token-tess...",
             modelLabel: "Modelo:",
@@ -207,7 +207,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             azureUrlLabel: "Azure Endpoint URL:",
             proxyNote: "En Power BI Desktop necesitas el proxy. En Service puedes dejar vacío.",
             azureNote: "El endpoint de Azure es obligatorio.",
-            tessProxyNote: "O proxy é obrigatório para a TESS (CORS + autenticação).",
+            tessProxyNote: "No Desktop necesitas el proxy. En Service publicado, déjalo vacío.",
             step2Title: "Paso 2 · API Key",
             step2Desc: "Ingresa tu clave del proveedor seleccionado:",
             keyLabel: "API Key:",
@@ -251,7 +251,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             azureUrlLabel: "Azure Endpoint URL:",
             proxyNote: "In Power BI Desktop you need the proxy. In Service you can leave it empty.",
             azureNote: "The Azure endpoint URL is required.",
-            tessProxyNote: "The proxy is mandatory for TESS (CORS + authentication).",
+            tessProxyNote: "On Desktop you need the proxy. In published Service, leave it empty.",
             step2Title: "Step 2 · API Key",
             step2Desc: "Enter your key for the selected provider:",
             keyLabel: "API Key:",
@@ -295,7 +295,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             azureUrlLabel: "URL do Azure Endpoint:",
             proxyNote: "No Power BI Desktop você precisa do proxy. No Service pode deixar vazio.",
             azureNote: "O endpoint do Azure é obrigatório.",
-            tessProxyNote: "O proxy é obrigatório para a TESS (CORS + autenticação).",
+            tessProxyNote: "No Desktop o proxy é necessário. No Service publicado, deixe vazio.",
             step2Title: "Passo 2 · API Key",
             step2Desc: "Insira sua chave do provedor selecionado:",
             keyLabel: "API Key:",
@@ -714,8 +714,8 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                 agentErrEl.style.display = "none";
 
                 loadBtn.addEventListener("click", function() {
-                    var proxyBase = stateProxy.replace(/\/$/, "");
-                    if (!proxyBase.startsWith("http")) {
+                    var proxyBase = (stateProxy || "").replace(/\/$/, "");
+                    if (proxyBase && !proxyBase.startsWith("http")) {
                         agentErrEl.textContent = self.t("errUrl");
                         agentErrEl.style.display = "block";
                         return;
@@ -724,7 +724,12 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
                     loadBtn.disabled = true;
                     spinnerEl.style.display = "inline";
 
-                    fetch(proxyBase + "/agents")
+                    var agentsUrl = proxyBase ? proxyBase + "/agents" : "https://api.tess.im/agents";
+                    var agentsFetchOpts = proxyBase
+                        ? {}
+                        : { headers: { "Authorization": "Bearer " + stateKey } };
+
+                    fetch(agentsUrl, agentsFetchOpts)
                         .then(function(r) {
                             if (!r.ok) throw new Error("HTTP " + r.status);
                             return r.json();
@@ -1055,9 +1060,16 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             wait_execution: true
         });
 
-        return fetch(proxyBase + "/agents/" + agentId + "/execute?wait_execution=true", {
+        var tessEndpoint = proxyBase
+            ? proxyBase + "/agents/" + agentId + "/execute?wait_execution=true"
+            : "https://api.tess.im/agents/" + agentId + "/execute?wait_execution=true";
+        var tessHeaders = proxyBase
+            ? { "Content-Type": "application/json" }
+            : { "Content-Type": "application/json", "Authorization": "Bearer " + self.apiKey };
+
+        return fetch(tessEndpoint, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: tessHeaders,
             body: body
         }).then(function(r) {
             if (!r.ok) {
@@ -1070,12 +1082,12 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             var firstResponse = data && data.responses && data.responses[0];
             if (!firstResponse) throw new Error("Resposta inválida da TESS");
             if (firstResponse.status === "succeeded") return firstResponse.output || "";
-            if (firstResponse.id) return self.pollTessResponse(proxyBase, firstResponse.id);
+            if (firstResponse.id) return self.pollTessResponse(proxyBase, firstResponse.id, 0, self.apiKey);
             throw new Error("Status inesperado: " + firstResponse.status);
         });
     };
 
-    Visual.prototype.pollTessResponse = function(proxyBase, responseId, attempt) {
+    Visual.prototype.pollTessResponse = function(proxyBase, responseId, attempt, apiKey) {
         var self = this;
         var maxAttempts = 30;
         var intervalMs = 2000;
@@ -1085,12 +1097,17 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             return Promise.reject(new Error("Timeout aguardando resposta da TESS"));
         }
 
+        var pollUrl = proxyBase
+            ? proxyBase + "/agent-responses/" + responseId
+            : "https://api.tess.im/agent-responses/" + responseId;
+        var pollHeaders = proxyBase
+            ? { "Content-Type": "application/json" }
+            : { "Content-Type": "application/json", "Authorization": "Bearer " + (apiKey || self.apiKey) };
+
         return new Promise(function(resolve) {
             setTimeout(resolve, intervalMs);
         }).then(function() {
-            return fetch(proxyBase + "/agent-responses/" + responseId, {
-                headers: { "Content-Type": "application/json" }
-            });
+            return fetch(pollUrl, { headers: pollHeaders });
         }).then(function(res) {
             if (!res.ok) throw new Error("Polling falhou: " + res.status);
             return res.json();
@@ -1098,7 +1115,7 @@ var PowerIATESS1F2A3B4C5D6E7F8A;
             var r = (data && data.responses && data.responses[0]) || data;
             if (r.status === "succeeded") return r.output || "";
             if (r.status === "failed") throw new Error("TESS retornou erro no processamento");
-            return self.pollTessResponse(proxyBase, responseId, currentAttempt + 1);
+            return self.pollTessResponse(proxyBase, responseId, currentAttempt + 1, apiKey);
         });
     };
 
@@ -1329,7 +1346,9 @@ CAPABILITIES = {
             "parameters": [
                 "http://localhost:3100",
                 "https://api.tess.im",
-                "https://api.anthropic.com"
+                "https://api.anthropic.com",
+                "https://api.openai.com",
+                "https://generativelanguage.googleapis.com"
             ]
         }
     ],
